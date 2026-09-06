@@ -8,9 +8,13 @@ Ayet Köşesi is a Noctalia desktop widget that displays a daily verse from the 
 - **Entry:** `ayet`
 - **License:** MIT
 
+## Requirements
+
+- `curl` must be installed and available on `PATH`; it is used to refresh the Akıl Kuran logo.
+
 ## External dependencies
 
-- `curl` — used to refresh the Akıl Kuran logo.
+The plugin depends on the `curl` command.
 
 ## Usage
 
