@@ -3,6 +3,7 @@ name = "Ayet Köşesi"
 version = "1.0.0"
 plugin_api = 24
 author = "alitura1"
+icon = "book"
 license = "MIT"
 dependencies = ["curl"]
 tags = ["desktop", "time", "utility"]
