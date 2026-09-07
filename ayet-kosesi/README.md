@@ -1,6 +1,6 @@
 # Ayet Köşesi
 
-Ayet Köşesi is a Noctalia desktop widget that displays a daily verse from the public Akıl Kuran API.
+Ayet Köşesi is a Noctalia desktop widget powered by Akıl Kuran's public **Günün Ayeti** API.
 
 ## Plugin
 
@@ -10,54 +10,14 @@ Ayet Köşesi is a Noctalia desktop widget that displays a daily verse from the 
 
 ## Requirements
 
-- `curl` must be installed and available on `PATH`; it is used to refresh the Akıl Kuran logo.
-
-## External dependencies
-
-The plugin depends on the `curl` command.
+- `curl` must be installed and available on `PATH`; it is used only to refresh the Akıl Kuran logo.
 
 ## Usage
 
 Add the `ayet` desktop widget from Noctalia's desktop widget settings.
 
-The widget displays a daily verse, the selected translation author, and an Akıl Kuran logo.
+The plugin polls `https://akilkuran.com/api/daily-verse` once per minute. The API is the single source of truth for Akıl Kuran's current automatic/manual Günün Ayeti.
 
-Click **Akıl Kuran'da aç** to open the displayed verse on akilkuran.com.
+The optional `author` query parameter is used to request the same daily verse in a selected public translation. The plugin first checks `~/.config/ayet-kosesi/meal-id`; if absent, it executes `~/.local/bin/akilkuran-meal-id`. If no local meal is available, it falls back to a language-based default (Turkish 105, English 32).
 
-## Translation selection
-
-The plugin can use a local translation/meal ID.
-
-Create:
-
-`~/.config/ayet-kosesi/meal-id`
-
-and put the numeric meal ID inside.
-
-Example:
-
-`14`
-
-When no local ID is present, the API default translation is used.
-
-## Network and storage
-
-Verse data is requested from the public Akıl Kuran API:
-
-`https://akilkuran.com/api/quran/surah/<surah>`
-
-The Akıl Kuran logo is refreshed once per day and cached locally.
-
-When the network is unavailable, the existing cached logo and cached verse remain available.
-
-The plugin does not access user accounts, browser storage, cookies, Firebase credentials, or private Akıl Kuran source code.
-
-The plugin does not download or execute remote code.
-
-## Desktop widget
-
-Entry ID:
-
-`ayet`
-
-No panel IPC command or launcher prefix is provided by this plugin.
+The plugin stores only its own verse/logo cache under Noctalia's plugin data directory. It does not access Akıl Kuran user accounts, browser storage, cookies, Firebase credentials, or private source code.
