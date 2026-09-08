@@ -1,5 +1,6 @@
 {
   "app_name": "Speedtest Meter",
+  "connection_tested_successfully": "Your connection was tested successfully",
   "copy_install_command": "Copy install command",
   "copy_result_link": "Copy result link",
   "error_cli_not_found": "No speedtest command was found (checked for `speedtest` and `speedtest-cli`).",
@@ -14,9 +15,9 @@
   "hint_stuck": "Taking longer than expected? Make sure `speedtest` works from a regular terminal too.",
   "idle_subtitle": "Measure download, upload, ping and see full technical details.",
   "last_result": "Last result",
+  "metric_city": "City",
   "metric_country": "Country",
   "metric_country_ip": "Country (IP)",
-  "metric_city": "City",
   "metric_download": "Download",
   "metric_external_ip": "External IP",
   "metric_host": "Host",
@@ -45,5 +46,6 @@
   "start_test": "Start test",
   "test_again": "Test again",
   "try_again": "Try again",
+  "unit_mbps": "Mbps",
   "widget_tooltip": "Speedtest Meter — click to run a speed test"
 }

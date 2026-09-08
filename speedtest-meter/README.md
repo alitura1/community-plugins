@@ -1,8 +1,23 @@
 # Speedtest Meter
 
-Run an internet speed test with a live speedometer, then see full technical
-results: ping, jitter, download/upload, test server (host, location,
-country) and your ISP.
+Run an internet speed test with a live speedometer and detailed results.
+
+## What it does
+
+Speedtest Meter runs a network speed test using the Ookla Speedtest CLI or
+`speedtest-cli`, displaying real-time results with a live speedometer
+gauge. It measures:
+
+- Download speed (Mbps)
+- Upload speed (Mbps)
+- Ping (ms)
+- Jitter (ms)
+- Packet loss (%)
+- Server details (name, host, location, country, IP)
+- Connection details (ISP, external IP, city, region, country, organization)
+
+The panel shows a visual speedometer during the test and displays full
+technical results upon completion.
 
 ## Plugin
 
@@ -21,29 +36,60 @@ country) and your ISP.
 |---------|------|---------|-------------|
 | `glyph` (widget) | `glyph` | `brand-speedtest` | Icon shown in the bar for the `speedtest-widget` widget. |
 
+## Requirements
+
+At least one of the following must be installed and on PATH:
+
+- **`speedtest`** (Ookla CLI) - preferred backend; gives a truly live gauge
+  with per-phase progress. `speedtest --version` is checked for the string
+  "Ookla" before it's trusted, since some distros' `speedtest-cli` package
+  also installs a same-named `speedtest` binary.
+- **`speedtest-cli`** (Python implementation) - fallback backend. No
+  incremental progress, so the gauge pulses instead of tracking real
+  numbers while it runs — the final result is still complete either way.
+- **`stdbuf`** (coreutils) - used, when present, to force line-buffered
+  output from the Ookla CLI so the live gauge updates in real time instead
+  of only at the end. Present on virtually every Linux system.
+
+Install the Ookla Speedtest CLI (recommended) or the Python fallback:
+
+```bash
+# Arch Linux (AUR) — package name varies, check `yay -Ss speedtest` first
+yay -S speedtest-bin
+
+# Ubuntu/Debian
+curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | sudo bash
+sudo apt-get install speedtest
+
+# Fedora
+curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.rpm.sh | sudo bash
+sudo dnf install speedtest
+
+# Or the Python fallback (also in most distros' official repos, e.g.
+# Arch: pacman -S speedtest-cli, plus Debian/Ubuntu, Fedora, openSUSE, Alpine)
+pip install speedtest-cli
+```
+
+`stdbuf` ships as part of coreutils and is already installed on virtually
+every Linux system — no separate install step needed.
+
+If neither speedtest tool is found, the error screen shows the right
+install command for the detected package manager (pacman/apt/dnf/zypper/apk)
+automatically.
+
+## External dependencies
+
+### Third-party services
+
+- **ipapi.co** - After every successful test, the panel sends one request
+  to `https://ipapi.co/json/` to resolve the client's public IP into
+  geolocation data (city, region, country, organization) shown alongside
+  the test server's own location. No data is stored or transmitted beyond
+  that single request.
+
 ## Installation
 
 Install via Noctalia Plugin Store.
-
-## Requirements
-
-At least one speedtest tool must be installed and on PATH:
-
-- `speedtest` - the official Ookla Speedtest CLI. Gives a truly live gauge
-  (per-phase progress). Not always in official distro repos (e.g. Arch:
-  AUR, package name varies — check `yay -Ss speedtest`).
-- `speedtest-cli` - the Python speedtest-cli package. Packaged in most
-  distros' official repos (Arch: `pacman -S speedtest-cli`, also
-  Debian/Ubuntu, Fedora, openSUSE, Alpine). No incremental progress, so the
-  gauge pulses instead of tracking real numbers while it runs — the final
-  result is still complete either way.
-
-If neither is found, the error screen shows the right install command for
-the detected package manager (pacman/apt/dnf/zypper/apk).
-
-**IPC Command:**
-
-noctalia msg panel-toggle nilsonlinux/speedtest-meter:speedtest
 
 ## Usage
 
@@ -54,47 +100,26 @@ noctalia msg panel-toggle nilsonlinux/speedtest-meter:speedtest
 4. Review the results: download/upload, ping, jitter, packet loss, test
    server details, your ISP and external IP
 
-## Dependencies
+## Panel IPC Command
 
-**stdbuf** (coreutils) - forces line-buffered output from the Ookla CLI so
-the live gauge updates in real time instead of only at the end. Present on
-virtually every Linux system.
+To toggle the panel from outside the plugin:
+
+```
+noctalia msg panel-toggle nilsonlinux/speedtest-meter:speedtest
+```
 
 ## Notes for further development
 
-- `speedtest` on PATH isn't proof it's the Ookla CLI: some distros' Python
-  `speedtest-cli` package also installs a `speedtest` binary (same tool,
-  different entry point name). `speedtest --version` is checked for the
-  string "Ookla" before trusting it; otherwise the plugin falls back to
-  `speedtest-cli`.
-- `ui.progress`'s exact prop schema (beyond `value`, 0..1) isn't confirmed —
-  a text-based bar (block characters) and an elapsed-time readout are shown
-  alongside it as guaranteed-to-render fallbacks.
-- Icon names tried for `ui.glyph` in the results screen (download, upload,
-  timer, dns, etc.) turned out not to exist in this Noctalia's bundled icon
-  set — they rendered as random unrelated glyphs instead of failing
-  visibly, so they were removed entirely rather than guessed a fourth time.
-  The results screen is icon-free plain text (plus the ↓/↑ characters,
-  which render fine since they're just text) until the real icon name list
-  is known.
-- The download/upload headline switched from stat cards to colored circles
-  per request. Colors are explicit hex (`#22c55e` green, `#f97316` orange)
-  rather than semantic role names (`"success"`/`"warning"`), since the
-  earlier role-name attempt rendered with no visible color difference in
-  testing — hex is guaranteed to show up regardless of what this theme's
-  color roles are actually called. `fill`/`width`/`height`/`radius` on
-  `ui.column` are confirmed working (that's how the circle and the earlier
-  `rss-notifier` badge pill are built).
-- `[[panel]]` field names (`title`/`width`/`height`) in `plugin.toml` are
-  still unconfirmed; `[[widget]]`/`[[widget.setting]]` are confirmed against
-  a working `rss-notifier` plugin.
-
-## Panel IPC Command
-
-To toggle the panel widget:
-
-noctalia msg panel-toggle nilsonlinux/speedtest-meter:speedtest
-text
+- `[[panel]]` field names (`width`/`height`) in `plugin.toml` are still
+  unconfirmed against Noctalia's real schema; `[[widget]]` /
+  `[[widget.setting]]` are confirmed against a working `rss-notifier`
+  plugin.
+- Icon names (`brand-speedtest`, `arrow-down`, `arrow-up`, `clock`,
+  `activity`, `shield-check`, etc.) are Tabler Icons names, confirmed
+  rendering correctly in testing.
+- Color/style props (`fill`, `radius`, `color` role names like
+  `primary`/`secondary`/`on_surface_variant`, and the `"role/opacity"`
+  shorthand like `"primary/0.12"`) are confirmed working.
 
 ## License
 

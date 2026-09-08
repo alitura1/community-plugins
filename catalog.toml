@@ -1487,8 +1487,8 @@ tags = ["bar", "niri", "panel", "service", "system", "utility"]
 [[plugin]]
 id = "felipeartur/ai-usagebar"
 name = "AI Usage"
-version = "2.1.0"
-updated_at = 1788198733
+version = "2.2.0"
+updated_at = 1788891106
 added_at = 1786903781
 author = "felipeartur"
 license = "MIT"
@@ -2273,13 +2273,13 @@ tags = ["audio", "media", "bar", "panel", "shortcut"]
 [[plugin]]
 id = "alitura1/ayet-kosesi"
 name = "Ayet Köşesi"
-version = "1.0.0"
-updated_at = 1788733836
+version = "1.4.0"
+updated_at = 1788815727
 added_at = 1788733836
 author = "alitura1"
 license = "MIT"
 icon = "book"
-description = "Akıl Kuran'dan günlük ayeti masaüstünde gösteren Noctalia eklentisi."
+description = "Akıl Kuran'ın public Günün Ayeti API'sinden günlük ayeti ve seçili meali masaüstünde gösteren Noctalia eklentisi."
 plugin_api = 24
 tags = ["desktop", "time", "utility"]
 

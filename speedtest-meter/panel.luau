@@ -133,7 +133,7 @@ local function heroCircle(labelKey: string, arrowGlyph: string, valueText: strin
 		}, {
 			ui.glyph({ name = arrowGlyph, size = 25, color = accent }),
 			ui.label({ text = valueText, fontSize = 29, fontWeight = "heavy", color = "on_surface" }),
-			ui.label({ text = "Mbps", fontSize = 11, fontWeight = "bold", color = "on_surface_variant" }),
+			ui.label({ text = noctalia.tr("unit_mbps"), fontSize = 11, fontWeight = "bold", color = "on_surface_variant" }),
 		}),
 		ui.row({
 			gap = 5,
@@ -173,7 +173,7 @@ local function titleBlock()
 			ui.glyph({ name = "brand-speedtest", size = 21, color = "primary" }),
 			ui.label({ text = noctalia.tr("result_title"), fontSize = 20, fontWeight = "heavy", color = "on_surface" }),
 		}),
-		ui.label({ text = "Sua conexão foi testada com sucesso", fontSize = 11, color = "on_surface_variant" }),
+		ui.label({ text = noctalia.tr("connection_tested_successfully"), fontSize = 11, color = "on_surface_variant" }),
 	})
 end
 
@@ -582,7 +582,7 @@ renderRunning = function()
 				color = "on_surface" 
 			}),
 			ui.label({ 
-				text = "Mbps", 
+				text = noctalia.tr("unit_mbps"), 
 				fontSize = 18,  -- Aumentado também
 				fontWeight = "bold", 
 				color = "on_surface_variant" 
