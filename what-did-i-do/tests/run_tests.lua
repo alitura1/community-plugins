@@ -644,12 +644,73 @@ do
   check("week topApps non-empty", #wk.topApps == 3)
   check("week perDay covers 7 days", #wk.perDay == 7)
   local todayRow = wk.perDay[7]
-  check("panel: week window includes today", wk.total == 1800)
-  check("panel: week topApps non-empty", #wk.topApps == 3)
-  check("panel: week perDay covers 7 days", #wk.perDay == 7)
-  local todayRow = wk.perDay[7]
   check("panel: perDay last entry is today", todayRow.dateKey == nowKey and todayRow.total == 900)
-end-- ── panel render: history must survive "no focused app" ─────────────────────
+end
+
+-- ── appicons: shared icon resolution helper ──────────────────────────────
+
+section("appicons")
+do
+  local appicons = prelude.loadModule(base, "lib/appicons.luau")
+
+  -- Known id resolves to the host path; host consulted exactly once per
+  -- id+size no matter how often resolve() runs (the cache contract).
+  local icons = appicons.newResolver({
+    appIconPath = function(id, _size)
+      if id == "brave-browser" then
+        return "/usr/share/icons/brave.png"
+      end
+      return nil
+    end,
+  })
+  check("appicons: known id resolves to host path", icons.resolve("brave-browser", 24) == "/usr/share/icons/brave.png")
+  check("appicons: size is part of the cache key", icons.resolve("brave-browser", 16) == "/usr/share/icons/brave.png")
+  for _ = 1, 5 do
+    icons.resolve("brave-browser", 24)
+    icons.resolve("brave-browser", 16)
+  end
+  check("appicons: cache prevents repeated host resolution", icons.hostCallCount() == 2)
+
+  -- Unknown app -> nil, and the miss is cached too (no re-asking).
+  check("appicons: unknown app resolves to nil", icons.resolve("no-such-app", 24) == nil)
+  for _ = 1, 3 do
+    icons.resolve("no-such-app", 24)
+  end
+  check("appicons: cached miss does not re-consult the host", icons.hostCallCount() == 3)
+
+  -- Invalid ids never reach the host.
+  check("appicons: empty id resolves to nil", icons.resolve("", 24) == nil)
+  check("appicons: non-string id resolves to nil", icons.resolve(nil, 24) == nil and icons.resolve(42, 24) == nil)
+
+  -- display_name stays independent from app_id: the helper resolves whatever
+  -- string it is given, verbatim — "Brave" must never fetch the
+  -- brave-browser icon (and vice versa).
+  local seen = {}
+  local byName = appicons.newResolver({
+    appIconPath = function(id, _size)
+      seen[id] = true
+      if id == "brave-browser" then
+        return "/icons/technical.png"
+      end
+      return nil
+    end,
+  })
+  check("appicons: display name does not resolve the app id's icon", byName.resolve("Brave", 24) == nil)
+  check("appicons: technical app id still resolves", byName.resolve("brave-browser", 24) == "/icons/technical.png")
+  check("appicons: ids reach the host verbatim", seen["Brave"] == true and seen["brave-browser"] == true)
+
+  -- Host errors are absorbed as misses (pcall), never propagated to the UI.
+  local exploding = appicons.newResolver({
+    appIconPath = function()
+      error("host exploded")
+    end,
+  })
+  check("appicons: host error degrades to nil", exploding.resolve("brave-browser", 24) == nil)
+  exploding.resolve("brave-browser", 24)
+  check("appicons: error miss is cached too", exploding.hostCallCount() == 1)
+end
+
+-- ── panel render: history must survive "no focused app" ─────────────────────
 
 -- Regression for the empty-panel bug: currentApp == nil must NOT suppress
 -- today's historical view. Drives the real panel.luau against a stub host
@@ -732,6 +793,10 @@ do
     return nil
   end
 
+  -- Icon host bookkeeping: how often the host was consulted per id@size
+  -- (the icon contract tests assert the cache prevents re-resolution).
+  local iconCounts = {}
+
   -- Fresh host + store per scenario; fresh panel module instance per load.
   local function makeHost(store)
     return {
@@ -745,7 +810,16 @@ do
         watch = function() end,
       },
       openSettings = function() end,
-      appIconPath = function() return nil end,
+      -- Only brave-browser resolves; everything else is a miss (fallback
+      -- rows must keep rendering without an icon).
+      appIconPath = function(id, size)
+        local k = tostring(id) .. "@" .. tostring(size)
+        iconCounts[k] = (iconCounts[k] or 0) + 1
+        if id == "brave-browser" then
+          return "/icons/" .. k .. ".png"
+        end
+        return nil
+      end,
       formatTime = function() return "14:16" end,
       readFile = function() return nil end,
       listDir = function() return nil end,
@@ -913,6 +987,625 @@ do
     end
     check("layout: root column flexes (scroll only flexes into a flexing parent)", lastTree.p.flexGrow == 1)
     cleanup()
+  end
+
+  -- Icon contract (targeted fix): top-app and session rows embed an
+  -- ui.image resolved from the TECHNICAL app id; apps without a resolvable
+  -- icon keep their row (fallback); the App ID tooltip survives; the host
+  -- is consulted once per id+size across re-renders (cache).
+  do
+    local function findKey(tree, key)
+      if tree.p and tree.p.key == key then return tree end
+      for _, k in ipairs(tree.kids or {}) do
+        local hit = findKey(k, key)
+        if hit then return hit end
+      end
+      return nil
+    end
+    local function hasImageIn(node, path)
+      if node.kind == "image" and node.p.path == path then return true end
+      for _, k in ipairs(node.kids or {}) do
+        if hasImageIn(k, path) then return true end
+      end
+      return false
+    end
+    local store = {
+      wdid_state = { schema = 1, tracking = true, paused = false, currentAppName = "" },
+      wdid_sessions = { sessions = sessions, rev = 1 },
+    }
+    local env = loadPanel(store)
+    env.render()
+
+    local topRow = findKey(lastTree, "app-1-brave-browser")
+    check("icons: top-app row for brave exists", topRow ~= nil)
+    check("icons: top-app row includes icon node (24px lookup)", topRow ~= nil and hasImageIn(topRow, "/icons/brave-browser@24.png"))
+
+    local sessRow = findKey(lastTree, "sess-s1")
+    check("icons: session row for brave exists", sessRow ~= nil)
+    check("icons: session row includes smaller icon node (16px)", sessRow ~= nil and hasImageIn(sessRow, "/icons/brave-browser@16.png"))
+
+    local kittyTop = findKey(lastTree, "app-2-kitty")
+    check("icons: top-app without icon keeps its row (no image)", kittyTop ~= nil and not hasImageIn(kittyTop, "/icons/kitty@24.png"))
+    local kittySess = findKey(lastTree, "sess-s2")
+    check("icons: session without icon keeps its row (no image)", kittySess ~= nil and not hasImageIn(kittySess, "/icons/kitty@16.png"))
+
+    local nameBtn = findButton(lastTree, "app-name-1-brave-browser")
+    check("icons: top-app App ID tooltip preserved",
+      nameBtn ~= nil and type(nameBtn.p.tooltip) == "string" and nameBtn.p.tooltip:find("brave-browser", 1, true) ~= nil)
+    local sessBtn = findButton(lastTree, "sess-name-s1")
+    check("icons: session App ID tooltip preserved",
+      sessBtn ~= nil and type(sessBtn.p.tooltip) == "string" and sessBtn.p.tooltip:find("brave-browser", 1, true) ~= nil)
+
+    -- Re-renders must not re-consult the host: the helper caches per id+size.
+    -- Base counts are captured AFTER the first render above (which resolved
+    -- through the host once); further renders must not grow them.
+    local base24 = iconCounts["brave-browser@24"] or 0
+    local base16 = iconCounts["brave-browser@16"] or 0
+    check("icons: first render resolved through the host", base24 >= 1 and base16 >= 1)
+    env.render()
+    env.render()
+    check("icons: host consulted once per id+size across re-renders",
+      iconCounts["brave-browser@24"] == base24 and iconCounts["brave-browser@16"] == base16)
+    cleanup()
+  end
+
+  -- Panel: unavailable + history -> banner AND history rows together; the
+  -- user must never read the banner as data loss.
+  do
+    local store = {
+      wdid_state = { schema = 1, provider = "none", trackingAvailable = false, tracking = true, paused = false, currentAppName = "", todayTotal = 1980, todayApps = 1, todayTopApps = {} },
+      wdid_sessions = { sessions = sessions, rev = 1 },
+    }
+    local env = loadPanel(store)
+    env.render()
+    check("panel: unavailable subtitle shown", hasLabelText(lastTree, "Activity tracking is unavailable for this compositor."))
+    check("panel: unavailable day banner shown", hasLabelText(lastTree, "Your existing history is still available."))
+    check("panel: history stays visible while unavailable", hasLabelText(lastTree, "33m"))
+    check("panel: unavailable is distinct from the idle state", not hasLabelText(lastTree, "No application focused"))
+    cleanup()
+  end
+
+  -- Panel: unavailable + empty history -> compact empty state, no crash.
+  do
+    local store = {
+      wdid_state = { schema = 1, provider = "none", trackingAvailable = false, tracking = true, paused = false, currentAppName = "", todayTotal = 0, todayApps = 0, todayTopApps = {} },
+      wdid_sessions = { sessions = {}, rev = 1 },
+    }
+    local env = loadPanel(store)
+    env.render()
+    check("panel: unavailable without history shows empty state", hasLabelText(lastTree, "No activity recorded yet"))
+    check("panel: unavailable banner present without history too", hasLabelText(lastTree, "Your existing history is still available."))
+    cleanup()
+  end
+end
+
+-- ── desktop widget icons ──────────────────────────────────────────────────
+
+-- The desktop widget consumes the service's shared state only; its top-app
+-- rows must embed the same cached, technical-id-keyed icon as the panel,
+-- with iconless apps keeping their row untouched.
+do
+  local nowKey = timeutil.dateKeyOf(os.time(), 0)
+  local store = {
+    wdid_state = {
+      schema = 1,
+      tracking = true,
+      paused = false,
+      todayTotal = 2580,
+      todayApps = 2,
+      todayTopApps = {
+        { appId = "brave-browser", appName = "Brave", seconds = 1980 },
+        { appId = "kitty", appName = "Kitty", seconds = 600 },
+      },
+    },
+  }
+  local seen = {}
+  _G.WDID_TEST_NOCTALIA = function()
+    return {
+      log = function() end,
+      nowMs = function() return os.time() * 1000 end,
+      tr = function(key) return key end,
+      trp = function(key) return key end,
+      setUpdateInterval = function() end,
+      state = {
+        get = function(k) return store[k] end,
+        set = function() end,
+        watch = function() end,
+      },
+      readFile = function() return nil end,
+      listDir = function() return nil end,
+      getenv = function() return nil end,
+      appIconPath = function(id, size)
+        seen[tostring(id) .. "@" .. tostring(size)] = true
+        if id == "brave-browser" then
+          return "/icons/brave@24.png"
+        end
+        return nil
+      end,
+    }
+  end
+  local function makeNode(kind, props, kids)
+    return { kind = kind, p = props or {}, kids = kids or {} }
+  end
+  _G.ui = setmetatable({}, {
+    __index = function(_, kind)
+      return function(props, kids)
+        return makeNode(kind, props, kids)
+      end
+    end,
+  })
+  local lastWidgetTree
+  _G.desktopWidget = { render = function(tree) lastWidgetTree = tree end }
+  local _, env = prelude.loadModule(base, "desktop_widget.luau")
+  env.update()
+
+  local function findKey(tree, key)
+    if tree.p and tree.p.key == key then return tree end
+    for _, k in ipairs(tree.kids or {}) do
+      local hit = findKey(k, key)
+      if hit then return hit end
+    end
+    return nil
+  end
+  local function hasImageIn(node, path)
+    if node.kind == "image" and node.p.path == path then return true end
+    for _, k in ipairs(node.kids or {}) do
+      if hasImageIn(k, path) then return true end
+    end
+    return false
+  end
+
+  local braveRow = findKey(lastWidgetTree, "dw-app-1-brave-browser")
+  check("desktop widget: brave top-app row exists", braveRow ~= nil)
+  check("desktop widget: brave row includes icon node (24px lookup)", braveRow ~= nil and hasImageIn(braveRow, "/icons/brave@24.png"))
+  check("desktop widget: icon resolved from the technical app id", seen["brave-browser@24"] == true)
+
+  local kittyRow = findKey(lastWidgetTree, "dw-app-2-kitty")
+  check("desktop widget: app without icon keeps its row (no image)", kittyRow ~= nil and not hasImageIn(kittyRow, "/icons/kitty@24.png"))
+
+  local nameBtn = findKey(lastWidgetTree, "dw-app-name-1-brave-browser")
+  check("desktop widget: App ID tooltip preserved",
+    nameBtn ~= nil and type(nameBtn.p.tooltip) == "string" and nameBtn.p.tooltip:find("brave-browser", 1, true) ~= nil)
+
+  _G.ui = nil
+  _G.desktopWidget = nil
+  _G.WDID_TEST_NOCTALIA = nil
+end
+
+-- ── launcher icons ────────────────────────────────────────────────────────
+
+-- App rows must use the dedicated LauncherResult.icon field (a path for
+-- ui.image), keep the technical id in badge, the human name as title, and
+-- the glyph as the host-side fallback when no icon resolves.
+do
+  local nowKey = timeutil.dateKeyOf(os.time(), 0)
+  local store = {
+    wdid_state = { schema = 1, tracking = true, paused = false, currentAppName = "" },
+    wdid_sessions = {
+      rev = 1,
+      sessions = {
+        { id = "l1", dateKey = nowKey, appId = "brave-browser", appName = "Brave", startedAtMs = (os.time() - 2000) * 1000, durationSeconds = 1980 },
+        { id = "l2", dateKey = nowKey, appId = "kitty", appName = "Kitty", startedAtMs = (os.time() - 900) * 1000, durationSeconds = 600 },
+      },
+    },
+  }
+  local seen = {}
+  _G.WDID_TEST_NOCTALIA = function()
+    return {
+      log = function() end,
+      nowMs = function() return os.time() * 1000 end,
+      tr = function(key) return key end,
+      trp = function(key) return key end,
+      state = {
+        get = function(k) return store[k] end,
+        set = function() end,
+        watch = function() end,
+      },
+      readFile = function() return nil end,
+      listDir = function() return nil end,
+      getenv = function() return nil end,
+      string = { trim = function(s) return s end },
+      appIconPath = function(id, size)
+        seen[tostring(id) .. "@" .. tostring(size)] = true
+        if id == "brave-browser" then
+          return "/icons/brave@32.png"
+        end
+        return nil
+      end,
+    }
+  end
+  local _, lenv = prelude.loadModule(base, "launcher.luau")
+
+  local rows = lenv.drillRows("today")
+  local braveRow, kittyRow
+  for _, row in ipairs(rows) do
+    if row.badge == "brave-browser" then
+      braveRow = row
+    elseif row.badge == "kitty" then
+      kittyRow = row
+    end
+  end
+
+  check("launcher: brave app row present in today drill", braveRow ~= nil)
+  check("launcher: icon uses the dedicated icon field", braveRow ~= nil and braveRow.icon == "/icons/brave@32.png")
+  check("launcher: title stays the human-readable name", braveRow ~= nil and braveRow.title == "Brave")
+  check("launcher: badge keeps the technical app id", braveRow ~= nil and braveRow.badge == "brave-browser")
+  check("launcher: icon resolved from the technical app id", seen["brave-browser@32"] == true)
+
+  check("launcher: iconless app keeps its row", kittyRow ~= nil)
+  check("launcher: iconless app has no icon and keeps its glyph", kittyRow ~= nil and kittyRow.icon == nil and kittyRow.glyph == "app-window")
+
+  _G.WDID_TEST_NOCTALIA = nil
+end
+
+-- ── provider selection & fallback (phase 1 portability) ──────────────────
+
+-- Detection + selection must be evidence-based: environment variable first,
+-- then the provider's required executable. Every path yields a usable
+-- provider — the fallback never spawns anything and never fabricates data.
+do
+  section("capability")
+  local capability = prelude.loadModule(base, "providers/capability.luau")
+
+  -- detect(): environment variables per compositor.
+  check("capability: hyprland env + hyprctl detected as hyprland",
+    capability.detect(function(n) return n == "HYPRLAND_INSTANCE_SIGNATURE" and "sess" or nil end,
+      function(n) return n == "hyprctl" end) == "hyprland")
+  check("capability: hyprland env WITHOUT hyprctl degrades to none",
+    capability.detect(function(n) return n == "HYPRLAND_INSTANCE_SIGNATURE" and "sess" or nil end,
+      function() return false end) == "none")
+  check("capability: niri env detected",
+    capability.detect(function(n) return n == "NIRI_SOCKET" and "/sock" or nil end,
+      function() return false end) == "niri")
+  check("capability: sway env detected",
+    capability.detect(function(n) return n == "SWAYSOCK" and "/sock" or nil end,
+      function() return false end) == "sway")
+  check("capability: no signals -> none",
+    capability.detect(function() return nil end, function() return false end) == "none")
+
+  -- fallback provider: interface-compatible, zero side effects, honest nils.
+  local fallback = capability.newFallbackProvider({})
+  check("capability: fallback reports unavailable", fallback.name == "none" and fallback.available == false)
+  local sawApp, sawNil = "unset", false
+  fallback.activeWindow(function(app)
+    sawApp = "called"
+    sawNil = app == nil
+  end)
+  check("capability: fallback activeWindow reports no application", sawApp == "called" and sawNil)
+  fallback.start(function() end)
+  fallback.stop()
+  check("capability: fallback start/stop are side-effect free", fallback.available == false)
+
+  -- selector: known provider wins; every other path lands on the fallback.
+  local fake = { name = "fake-hypr", available = true, activeWindow = function() end }
+  local sel = capability.newSelector({
+    getenv = function(n) return n == "HYPRLAND_INSTANCE_SIGNATURE" and "sess" or nil end,
+    commandExists = function(n) return n == "hyprctl" end,
+    resolve = function(name)
+      if name == "hyprland" then return fake end
+      return nil
+    end,
+    log = function() end,
+  })
+  local picked, detected = sel.select({})
+  check("capability: selection picks the hyprland provider when resolvable", picked == fake and detected == "hyprland")
+
+  local selNoProvider = capability.newSelector({
+    getenv = function(n) return n == "HYPRLAND_INSTANCE_SIGNATURE" and "sess" or nil end,
+    commandExists = function() return true end,
+    resolve = function() return nil end,
+    log = function() end,
+  })
+  local fallbackPick, detectedNone = selNoProvider.select({})
+  check("capability: unresolvable provider falls back (no crash)",
+    fallbackPick.name == "none" and fallbackPick.available == false and detectedNone == "hyprland")
+
+  local selNiri = capability.newSelector({
+    getenv = function(n) return n == "NIRI_SOCKET" and "/sock" or nil end,
+    commandExists = function() return true end,
+    resolve = function() return nil end,
+    log = function() end,
+  })
+  local niriPick, detectedNiri = selNiri.select({})
+  check("capability: recognized-but-unimplemented compositor degrades (phase 1)",
+    niriPick.name == "none" and detectedNiri == "niri")
+end
+
+-- Service-level integration: provider selection flows into the published
+-- shared state, and the stored history stays accessible when tracking is
+-- unavailable. Runs the REAL service.luau against a stub host backed by an
+-- in-memory filesystem (so storage loads the pre-seeded history). Note:
+-- phase 1 does NOT claim niri/sway tracking — niri/sway select the fallback.
+do
+  local nowKey = timeutil.dateKeyOf(os.time(), 0)
+  local seedSessions = {
+    { id = "hist-1", dateKey = nowKey, appId = "brave-browser", appName = "Brave", startedAtMs = (os.time() - 2000) * 1000, durationSeconds = 1980 },
+  }
+  local function runService(envVars, tools, storedSessions)
+    local fs = {}
+    local function encodePayload(sessions)
+      return '{"version":1,"sessions":['
+        .. '{"id":"' .. sessions[1].id .. '","dateKey":"' .. sessions[1].dateKey
+        .. '","appId":"' .. sessions[1].appId .. '","appName":"' .. sessions[1].appName
+        .. '","startedAtMs":' .. sessions[1].startedAtMs
+        .. ',"durationSeconds":' .. sessions[1].durationSeconds .. "}]}",
+        nil
+    end
+    if storedSessions then
+      fs["/data/activity/history.json"] = encodePayload(storedSessions)
+    end
+    local store = {}
+    _G.WDID_TEST_NOCTALIA = function()
+      return {
+        log = function() end,
+        nowMs = function() return os.time() * 1000 end,
+        getenv = function(n) return envVars[n] end,
+        commandExists = function(n) return tools[n] == true end,
+        runAsync = function() return false end,
+        runStream = function() return false end,
+        tr = function(key) return key end,
+        notify = function() end,
+        getConfig = function() return nil end,
+        pluginDataDir = function() return "/data" end,
+        mkdirAll = function() return true end,
+        fileExists = function(p) return fs[p] ~= nil end,
+        readFile = function(p) return fs[p], nil end,
+        writeFile = function(p, c) fs[p] = c return true end,
+        renameFile = function(a, b) fs[b] = fs[a] fs[a] = nil return true end,
+        removeFile = function(p) fs[p] = nil return true end,
+        listDir = function()
+          local out = {}
+          for k in pairs(fs) do
+            out[#out + 1] = k
+          end
+          return out
+        end,
+        state = {
+          get = function(k) return store[k] end,
+          set = function(k, v) store[k] = v end,
+          watch = function() end,
+        },
+      }
+    end
+    prelude.loadModule(base, "service.luau")
+    _G.WDID_TEST_NOCTALIA = nil
+    return store
+  end
+
+  -- Hyprland session with hyprctl: full tracking available.
+  local hyprStore = runService({ HYPRLAND_INSTANCE_SIGNATURE = "sess" }, { hyprctl = true }, seedSessions)
+  check("service: hyprland publishes trackingAvailable",
+    hyprStore.wdid_state ~= nil and hyprStore.wdid_state.trackingAvailable == true and hyprStore.wdid_state.provider == "hyprland")
+
+  -- Hyprland session WITHOUT hyprctl: honest degradation, not pretend tracking.
+  local noCtlStore = runService({ HYPRLAND_INSTANCE_SIGNATURE = "sess" }, {}, seedSessions)
+  check("service: missing required executable degrades to unavailable",
+    noCtlStore.wdid_state.trackingAvailable == false and noCtlStore.wdid_state.provider == "none")
+  check("service: degraded state keeps history totals",
+    noCtlStore.wdid_state.todayTotal ~= nil and noCtlStore.wdid_state.todayTotal > 0)
+
+  -- Niri session: recognized, but phase 1 ships no niri provider (fallback).
+  local niriStore = runService({ NIRI_SOCKET = "/sock" }, { hyprctl = true }, seedSessions)
+  check("service: niri session marks tracking unavailable (no niri provider yet)",
+    niriStore.wdid_state.trackingAvailable == false and niriStore.wdid_state.provider == "niri")
+  check("service: niri session keeps history accessible",
+    niriStore.wdid_sessions ~= nil and type(niriStore.wdid_sessions.sessions) == "table" and #niriStore.wdid_sessions.sessions == 1)
+
+  -- No compositor at all: fallback, no fabricated data, no sessions invented.
+  local noneStore = runService({}, { hyprctl = true }, seedSessions)
+  check("service: no compositor -> fallback provider",
+    noneStore.wdid_state.trackingAvailable == false and noneStore.wdid_state.provider == "none")
+  check("service: fallback fabricates no current application",
+    noneStore.wdid_state.currentApp == nil and noneStore.wdid_state.currentAppName == "")
+end
+
+-- Panel / desktop widget / bar / launcher: honest unavailable state (states
+-- must stay distinct: waiting-for-tracker, idle, unavailable, focused).
+do
+  local nowKey = timeutil.dateKeyOf(os.time(), 0)
+  local histSessions = {
+    { id = "u1", dateKey = nowKey, appId = "brave-browser", appName = "Brave", startedAtMs = (os.time() - 2000) * 1000, durationSeconds = 1980 },
+  }
+  local unavailableState = { schema = 1, provider = "none", trackingAvailable = false, tracking = true, paused = false, currentAppName = "", todayTotal = 1980, todayApps = 1, todayTopApps = {} }
+
+  -- Real translation strings (same approach as the panel harness) so the
+  -- assertions below match what users actually see, durations included.
+  local trStrings = {}
+  do
+    local fh = io.open(base .. "/translations/en.json", "r")
+    local okJ, enjson = json.decode(fh:read("*a"))
+    fh:close()
+    local function flatten(prefix, tbl)
+      for k, v in pairs(tbl) do
+        if type(v) == "table" then
+          flatten(prefix .. k .. ".", v)
+        else
+          trStrings[prefix .. k] = v
+        end
+      end
+    end
+    flatten("", enjson)
+  end
+  local function trStub(key, a, b)
+    local out = trStrings[key] or key
+    local subst = type(a) == "table" and a or b
+    if type(subst) == "table" then
+      for k, v in pairs(subst) do
+        out = out:gsub("{" .. k .. "}", tostring(v))
+      end
+    end
+    return out
+  end
+
+  -- Desktop widget: unavailable -> keeps the historical total, never
+  -- extrapolates a live open session, shows the unavailable label.
+  do
+    local store = {
+      wdid_state = {
+        schema = 1, tracking = true, paused = false,
+        trackingAvailable = false, provider = "none",
+        todayTotal = 1980, todayApps = 1,
+        currentAppSinceMs = (os.time() - 500) * 1000, -- would inflate if misused
+        todayTopApps = {},
+      },
+    }
+    _G.WDID_TEST_NOCTALIA = function()
+      return {
+        log = function() end,
+        nowMs = function() return os.time() * 1000 end,
+        tr = trStub,
+        trp = trStub,
+        setUpdateInterval = function() end,
+        state = {
+          get = function(k) return store[k] end,
+          set = function() end,
+          watch = function() end,
+        },
+        readFile = function() return nil end,
+        listDir = function() return nil end,
+        getenv = function() return nil end,
+        appIconPath = function() return nil end,
+      }
+    end
+    local function makeNode(kind, props, kids)
+      return { kind = kind, p = props or {}, kids = kids or {} }
+    end
+    _G.ui = setmetatable({}, {
+      __index = function(_, kind)
+        return function(props, kids)
+          return makeNode(kind, props, kids)
+        end
+      end,
+    })
+    local lastTreeDw
+    _G.desktopWidget = { render = function(tree) lastTreeDw = tree end }
+    local _, denv = prelude.loadModule(base, "desktop_widget.luau")
+    denv.update()
+    local function hasLabelTextDw(want)
+      local function walk(n)
+        if n.kind == "label" and n.p.text == want then return true end
+        for _, k in ipairs(n.kids or {}) do
+          if walk(k) then return true end
+        end
+        return false
+      end
+      return walk(lastTreeDw)
+    end
+    check("desktop widget: unavailable label shown", hasLabelTextDw("Activity tracking is unavailable for this compositor."))
+    check("desktop widget: historical total kept without live extrapolation", hasLabelTextDw("33m"))
+    _G.ui = nil
+    _G.desktopWidget = nil
+    _G.WDID_TEST_NOCTALIA = nil
+  end
+
+  -- Bar widget: unavailable -> plug-off glyph, muted, tooltip explains; no
+  -- live timer extrapolation.
+  do
+    local store = {
+      wdid_state = {
+        schema = 1, tracking = true, paused = false,
+        trackingAvailable = false, provider = "none",
+        todayTotal = 1980, todayApps = 1,
+        currentAppSinceMs = (os.time() - 500) * 1000,
+      },
+    }
+    _G.WDID_TEST_NOCTALIA = function()
+      return {
+        log = function() end,
+        nowMs = function() return os.time() * 1000 end,
+        tr = trStub,
+        trp = trStub,
+        setUpdateInterval = function() end,
+        getConfig = function(key)
+          if key == "glyph" then return "clock-hour-4" end
+          return nil
+        end,
+        state = {
+          get = function(k) return store[k] end,
+          set = function() end,
+          watch = function() end,
+        },
+      }
+    end
+    local function makeNode(kind, props, kids)
+      return { kind = kind, p = props or {}, kids = kids or {} }
+    end
+    _G.ui = setmetatable({}, {
+      __index = function(_, kind)
+        return function(props, kids)
+          return makeNode(kind, props, kids)
+        end
+      end,
+    })
+    local barTree, barTooltip
+    _G.barWidget = {
+      setVisible = function() end,
+      isVertical = function() return false end,
+      render = function(tree) barTree = tree end,
+      setTooltip = function(t) barTooltip = t end,
+    }
+    local _, wenv = prelude.loadModule(base, "widget.luau")
+    wenv.update()
+    local glyphNode = barTree and barTree.kids and barTree.kids[1]
+    check("bar: unavailable shows the plug-off glyph", glyphNode ~= nil and glyphNode.kind == "glyph" and glyphNode.p.name == "plug-off")
+    check("bar: unavailable tooltip explains instead of pretending",
+      type(barTooltip) == "string" and barTooltip:find("Activity tracking is unavailable for this compositor.", 1, true) ~= nil)
+    check("bar: unavailable total stays historical (no fake ticking)",
+      barTree ~= nil and barTree.kids[2] ~= nil and barTree.kids[2].p.text == "33m")
+    _G.ui = nil
+    _G.barWidget = nil
+    _G.WDID_TEST_NOCTALIA = nil
+  end
+
+  -- Launcher: unavailable -> toggle replaced by an honest status row; the
+  -- history drill keeps working and still lists applications.
+  do
+    local store = {
+      wdid_state = unavailableState,
+      wdid_sessions = { sessions = histSessions, rev = 1 },
+    }
+    _G.WDID_TEST_NOCTALIA = function()
+      return {
+        log = function() end,
+        nowMs = function() return os.time() * 1000 end,
+        tr = trStub,
+        trp = trStub,
+        state = {
+          get = function(k) return store[k] end,
+          set = function() end,
+          watch = function() end,
+        },
+        readFile = function() return nil end,
+        listDir = function() return nil end,
+        getenv = function() return nil end,
+        appIconPath = function(id, size) return "/icons/" .. id .. "@" .. size .. ".png" end,
+        string = { trim = function(s) return s end },
+      }
+    end
+    local _, lenv = prelude.loadModule(base, "launcher.luau")
+    local results = {}
+    _G.launcher = { setResults = function(_q, rows) results = rows end, setQuery = function() end }
+    lenv.onQuery("")
+    local hasUnavailable, hasToggle
+    for _, row in ipairs(results) do
+      if row.title == "Activity tracking is unavailable for this compositor." then
+        hasUnavailable = row.id == "" -- action-less: nothing broken to activate
+      elseif row.id == "act:toggle" then
+        hasToggle = true
+      end
+    end
+    check("launcher: unavailable replaces the live toggle with an honest row", hasUnavailable == true and hasToggle == nil)
+
+    local drill = lenv.drillRows("today")
+    local braveRow
+    for _, row in ipairs(drill) do
+      if row.badge == "brave-browser" then
+        braveRow = row
+      end
+    end
+    check("launcher: history drill still works while unavailable", braveRow ~= nil and braveRow.icon == "/icons/brave-browser@32.png")
+    _G.launcher = nil
+    _G.WDID_TEST_NOCTALIA = nil
   end
 end
 

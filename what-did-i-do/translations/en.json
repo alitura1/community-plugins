@@ -79,6 +79,8 @@
     },
     "title": "What Did I Do",
     "top_apps": "Top applications",
+    "unavailable": "Activity tracking is unavailable for this compositor.",
+    "unavailable_body": "Your existing history is still available.",
     "waiting_for_tracker": "Waiting for the tracker…",
     "week": {
       "average": "Daily average",

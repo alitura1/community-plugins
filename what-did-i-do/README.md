@@ -51,18 +51,28 @@ The bar widget shows today's total, e.g. `◷ 3h 42m`.
 
 ## Requirements
 
-The tracker targets **Hyprland**. Install on `PATH`:
+Activity **tracking** currently targets **Hyprland**. For tracking, install on `PATH`:
 
 - `hyprctl` — focused-window polling (part of Hyprland itself)
 - `hypridle` — idle detection (the plugin runs its own private, actionless instance; your own `hypridle` config is untouched)
 - `dbus-monitor` — screen lock and suspend/resume events via `org.freedesktop.login1`
 
-`hypridle` and `dbus-monitor` are optional: without them the plugin still
-tracks the focused application but undercounts time instead of inventing
-activity for idle or locked periods.
+The plugin does not require Hyprland to be useful. On any compositor it
+loads normally: the dashboard, bar widget, desktop widget, launcher,
+settings and the entire stored history stay accessible. When the running
+compositor does not provide a way to read the focused application, the
+plugin says so honestly ("Activity tracking is unavailable for this
+compositor") instead of pretending to track, and records nothing.
+
+`hypridle` and `dbus-monitor` are optional on Hyprland: without them the
+plugin still tracks the focused application but undercounts time instead of
+inventing activity for idle or locked periods. `dbus-monitor` speaks the
+desktop-session-standard `org.freedesktop.login1` API and is not
+compositor-specific.
 
 Other compositors are not supported yet; the provider layer is isolated in
-`providers/` so future backends can be added without touching the tracker.
+`providers/` (selection in `providers/capability.luau`) so future backends
+can be added without touching the tracker.
 
 ## Usage
 
@@ -263,9 +273,10 @@ stored in your Noctalia config.
 - **Panel shows "Waiting for the tracker…"** — the service entry has not
   published its state yet. Make sure the plugin (and its `service` entry) is
   enabled, then check Noctalia's log for lines prefixed `what-did-i-do:`.
-- **Nothing is tracked at all** — the tracker targets Hyprland and needs
-  `hyprctl` on `PATH`. Without a working compositor provider there is nothing
-  to record.
+- **Nothing is tracked at all** — tracking needs a compositor provider. On
+  Hyprland, `hyprctl` must be on `PATH`; on any other compositor the plugin
+  shows "Activity tracking is unavailable for this compositor" and records
+  nothing. Your history remains accessible either way.
 - **History was replaced by an empty dataset** — the previous history file
   was malformed or carried an unknown schema version. The original file was
   preserved in the data directory as `history.corrupt-*.json` or

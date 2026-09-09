@@ -11,6 +11,7 @@ local formatting = require("./lib/formatting.luau")
 local aggregation = require("./lib/aggregation.luau")
 local timeutil = require("./lib/timeutil.luau")
 local appnames = require("./lib/appnames.luau")
+local appicons = require("./lib/appicons.luau")
 
 formatting._tr = noctalia.tr
 
@@ -20,6 +21,26 @@ local displayNames = appnames.newResolver({
   listDir = noctalia.listDir,
   getenv = noctalia.getenv,
 })
+
+-- Launcher rows use the host's dedicated LauncherResult.icon field (an icon
+-- path for ui.image), not the glyph slot and not the badge. Same shared,
+-- cached resolver as panel/desktop widget; keys on the technical app_id.
+local icons = appicons.newResolver({ appIconPath = noctalia.appIconPath })
+
+-- appRow(title, appId, subtitle, badge, score) -> LauncherResult for an
+-- application. icon carries the resolved path (nil when nothing resolves —
+-- the host then falls back to the glyph, which stays "app-window").
+local function appRow(title, appId, subtitle, badge, score)
+  return {
+    id = "noop:" .. appId,
+    title = title,
+    subtitle = subtitle,
+    badge = badge,
+    glyph = "app-window",
+    icon = icons.resolve(appId, 32),
+    score = score,
+  }
+end
 
 local MAX_ROWS = 25
 local PANEL_ID = "alitura1/what-did-i-do:dashboard"
@@ -75,8 +96,30 @@ end
 local function topCategories()
   local s = serviceState()
   local paused = s.paused == true or s.tracking == false
+  local unavailable = s.trackingAvailable == false
   local total = totalFor(todayKey())
   local appsCount = tonumber(s.todayApps) or 0
+  -- Live toggle is only offered when tracking exists; on an unsupported
+  -- compositor the slot becomes an honest, action-less explanation instead
+  -- of a control that cannot work. History drills stay fully functional.
+  local toggleRow
+  if unavailable then
+    toggleRow = {
+      id = "",
+      title = noctalia.tr("panel.unavailable"),
+      subtitle = noctalia.tr("panel.unavailable_body"),
+      glyph = "plug-off",
+      score = 60,
+    }
+  else
+    toggleRow = {
+      id = "act:toggle",
+      title = paused and noctalia.tr("launcher.resume") or noctalia.tr("launcher.pause"),
+      subtitle = paused and noctalia.tr("launcher.resume_sub") or noctalia.tr("launcher.pause_sub"),
+      glyph = paused and "player-play" or "player-pause",
+      score = 60,
+    }
+  end
   local rows = {
     {
       id = "cat:today",
@@ -108,13 +151,7 @@ local function topCategories()
       glyph = "layout-dashboard",
       score = 70,
     },
-    {
-      id = "act:toggle",
-      title = paused and noctalia.tr("launcher.resume") or noctalia.tr("launcher.pause"),
-      subtitle = paused and noctalia.tr("launcher.resume_sub") or noctalia.tr("launcher.pause_sub"),
-      glyph = paused and "player-play" or "player-pause",
-      score = 60,
-    },
+    toggleRow,
     {
       id = "act:delete",
       title = noctalia.tr("launcher.delete_confirm"),
@@ -144,14 +181,13 @@ local function dayRows(dateKey)
     if i > MAX_ROWS then
       break
     end
-    table.insert(rows, {
-      id = "noop:" .. tostring(app.appId),
-      title = displayNames.resolve(app.appId, app.appName),
-      subtitle = formatting.fmtDuration(app.seconds),
-      badge = tostring(app.appId),
-      glyph = "app-window",
-      score = 100 - i,
-    })
+    table.insert(rows, appRow(
+      displayNames.resolve(app.appId, app.appName),
+      tostring(app.appId),
+      formatting.fmtDuration(app.seconds),
+      tostring(app.appId),
+      100 - i
+    ))
   end
   if #rows == 0 then
     rows[1] = statusRow(noctalia.tr("launcher.empty"), "", "moon")
@@ -166,14 +202,13 @@ local function weekRows()
     if i > MAX_ROWS then
       break
     end
-    table.insert(rows, {
-      id = "noop:" .. tostring(app.appId),
-      title = displayNames.resolve(app.appId, app.appName),
-      subtitle = formatting.fmtDuration(app.seconds),
-      badge = tostring(app.appId),
-      glyph = "app-window",
-      score = 100 - i,
-    })
+    table.insert(rows, appRow(
+      displayNames.resolve(app.appId, app.appName),
+      tostring(app.appId),
+      formatting.fmtDuration(app.seconds),
+      tostring(app.appId),
+      100 - i
+    ))
   end
   if #rows == 0 then
     rows[1] = statusRow(noctalia.tr("launcher.empty"), "", "moon")

@@ -5,6 +5,14 @@
 -- consume the compact "wdid_state" snapshot and send commands via
 -- "wdid_command" (noctalia.state) or IPC. They never poll hyprctl.
 --
+-- Provider selection (Phase 1 portability): the provider is chosen at
+-- startup from the session environment (providers/capability.luau). On an
+-- unsupported compositor — or when the selected provider's mechanism is
+-- missing — a dependency-free fallback provider keeps every entry, setting
+-- and the stored history alive while honestly reporting that tracking is
+-- unavailable; no activity is ever fabricated. Being a Noctalia user must
+-- not require being a Hyprland user.
+--
 -- Published state (plain data only — entries are isolated VMs):
 --   wdid_state = {
 --     schema = 1,
@@ -29,6 +37,7 @@ local storage_mod = require("./lib/storage.luau")
 local aggregation = require("./lib/aggregation.luau")
 local timeutil = require("./lib/timeutil.luau")
 local hyprland_mod = require("./providers/hyprland.luau")
+local capability = require("./providers/capability.luau")
 
 -- ── settings ─────────────────────────────────────────────────────────────────
 
@@ -45,13 +54,30 @@ end
 
 local settings = getSettings()
 
-local hyprland = hyprland_mod.newProvider({
-  idleAfterSeconds = settings.idleAfterSeconds,
-})
+-- Provider selection: detect the compositor from the session environment,
+-- verify the required mechanism exists, and pick the provider. Selection can
+-- never fail into a crash — every path yields a usable provider object.
+local function resolveProvider(name)
+  if name == "hyprland" then
+    return hyprland_mod.newProvider({ idleAfterSeconds = settings.idleAfterSeconds })
+  end
+  -- Phase 1 ships exactly one concrete provider; niri/sway/none select the
+  -- built-in fallback inside the selector.
+  return nil
+end
+
+local provider, detectedCompositor = capability.newSelector({
+  resolve = resolveProvider,
+}).select({ idleAfterSeconds = settings.idleAfterSeconds })
+
+-- Capability-level truth for the UI: a selected provider that matches its
+-- detection actually implements tracking. (The provider's own `available`
+-- field is momentary poll health for real providers, not capability.)
+local trackingAvailable = detectedCompositor ~= "none" and provider.name == detectedCompositor
 
 function onConfigChanged()
   settings = getSettings()
-  hyprland.idleAfterSeconds = settings.idleAfterSeconds
+  provider.idleAfterSeconds = settings.idleAfterSeconds
   noctalia.log("what-did-i-do: settings updated")
 end
 
@@ -179,6 +205,8 @@ local function publish()
 
   noctalia.state.set("wdid_state", {
     schema = 1,
+    provider = detectedCompositor,
+    trackingAvailable = trackingAvailable,
     tracking = settings.trackingEnabled and not paused,
     paused = paused,
     todayTotal = liveTotal,
@@ -230,7 +258,7 @@ local function handleProviderEvent(kind)
   persistIfDue(nowMs)
 end
 
-hyprland.onEvent = handleProviderEvent
+provider.onEvent = handleProviderEvent
 
 -- ── main loop ────────────────────────────────────────────────────────────────
 
@@ -248,7 +276,7 @@ function update()
 
   pruneIfNeeded(dateKeyFor(nowMs))
 
-  hyprland.activeWindow(function(app)
+  provider.activeWindow(function(app)
     if not settings.trackingEnabled or paused then
       return
     end
@@ -351,7 +379,7 @@ function onExit(_signal, _reason)
   persistNow()
 end
 
-hyprland.start(handleProviderEvent)
+provider.start(handleProviderEvent)
 
 -- Startup: adopt persisted state, prune, publish, and flush once.
 pruneIfNeeded(dateKeyFor(noctalia.nowMs()))

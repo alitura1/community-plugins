@@ -20,29 +20,33 @@ noctalia.setUpdateInterval(1000)
 local function render()
   local s = noctalia.state.get("wdid_state") or {}
   local paused = s.paused == true or s.tracking == false
+  -- Phase 1 portability: unavailable compositor -> honest indicator, no
+  -- fake live timer, compact as always.
+  local unavailable = s.trackingAvailable == false
 
   -- The user can hide the widget from settings without removing it from the bar.
   barWidget.setVisible(noctalia.getConfig("show_bar_widget") ~= false)
 
-  -- Today's total plus the live open session since the last publish.
+  -- Today's total plus the live open session since the last publish (never
+  -- extrapolated when tracking does not exist).
   local total = tonumber(s.todayTotal) or 0
   local since = tonumber(s.currentAppSinceMs)
-  if not paused and since then
+  if not paused and not unavailable and since then
     total = total + math.max(0, math.floor((noctalia.nowMs() - since) / 1000))
   end
 
   local children = {}
   if showGlyph then
     children[#children + 1] = ui.glyph({
-      name = paused and "player-pause" or glyphSetting,
+      name = unavailable and "plug-off" or (paused and "player-pause" or glyphSetting),
       size = 14,
-      color = paused and "on_surface/0.6" or "on_surface",
+      color = (paused or unavailable) and "on_surface/0.6" or "on_surface",
     })
   end
   if showText then
     children[#children + 1] = ui.label({
       text = formatting.fmtDuration(total),
-      color = paused and "on_surface/0.6" or "on_surface",
+      color = (paused or unavailable) and "on_surface/0.6" or "on_surface",
     })
   end
   if #children == 0 then
@@ -55,7 +59,9 @@ local function render()
   -- Tooltip: slightly richer than the bar, still compact.
   local appsCount = tonumber(s.todayApps) or 0
   local detail
-  if paused then
+  if unavailable then
+    detail = noctalia.tr("panel.unavailable")
+  elseif paused then
     detail = noctalia.tr("widget.tooltip.paused")
   else
     detail = noctalia.tr("widget.tooltip.active")

@@ -79,6 +79,8 @@
     },
     "title": "What Did I Do",
     "top_apps": "En çok kullanılan uygulamalar",
+    "unavailable": "Bu pencere yöneticisi için etkinlik takibi kullanılamıyor.",
+    "unavailable_body": "Mevcut geçmişiniz hâlâ görüntülenebilir.",
     "waiting_for_tracker": "Takipçiden bekleniyor…",
     "week": {
       "average": "Günlük ortalama",

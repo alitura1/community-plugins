@@ -13,6 +13,7 @@ local formatting = require("./lib/formatting.luau")
 local aggregation = require("./lib/aggregation.luau")
 local timeutil = require("./lib/timeutil.luau")
 local appnames = require("./lib/appnames.luau")
+local appicons = require("./lib/appicons.luau")
 
 formatting._tr = noctalia.tr
 
@@ -22,6 +23,11 @@ local displayNames = appnames.newResolver({
   listDir = noctalia.listDir,
   getenv = noctalia.getenv,
 })
+
+-- Icons resolve from the technical app_id (never the display name) through
+-- the host's desktop-entry/XDG lookup, cached per id+size (misses included)
+-- so no lookup repeats on every render/update.
+local icons = appicons.newResolver({ appIconPath = noctalia.appIconPath })
 
 -- Tooltip text for an application row: the primary label plus the technical
 -- identifier (kept out of the main row; the id is not translatable and is
@@ -54,7 +60,25 @@ local function serviceState()
   return noctalia.state.get("wdid_state") or {}
 end
 
--- ── ui builders ──────────────────────────────────────────────────────────────
+-- ── ui builders ──────────────────────────────────────────────────────────
+
+-- Header tracking controls per state: when tracking is unavailable for the
+-- compositor, the pause/resume toggle cannot do anything real, so it becomes
+-- a passive indicator (the honest explanation lives in the subtitle).
+local function trackingControls(s)
+  if s.trackingAvailable == false then
+    return ui.glyph({ name = "plug-off", size = 14, color = "on_surface/0.5" })
+  end
+  return ui.button({
+    glyph = s.paused and "player-play" or "player-pause",
+    glyphSize = 14,
+    variant = "ghost",
+    tooltip = s.paused and noctalia.tr("launcher.resume") or noctalia.tr("launcher.pause"),
+    onClick = function()
+      noctalia.state.set("wdid_command", { op = s.paused and "resume" or "pause" })
+    end,
+  })
+end
 
 local TAB_ORDER = { "today", "yesterday", "week" }
 local TAB_KEYS = { today = "panel.tab.today", yesterday = "panel.tab.yesterday", week = "panel.tab.week" }
@@ -84,6 +108,10 @@ local function headerRow()
     subtitle = noctalia.tr("panel.waiting_for_tracker")
   elseif s.tracking == false then
     subtitle = noctalia.tr("panel.paused_banner")
+  elseif s.trackingAvailable == false then
+    -- Distinct state: tracking unavailable for this compositor (history
+    -- below stays visible — the user must never read this as data loss).
+    subtitle = noctalia.tr("panel.unavailable")
   elseif s.currentAppName ~= nil and s.currentAppName ~= "" then
     subtitle = noctalia.tr("panel.current_session") .. " · " .. s.currentAppName
   else
@@ -93,15 +121,7 @@ local function headerRow()
     ui.row({ gap = 8, align = "center", justify = "space_between" }, {
       ui.label({ text = noctalia.tr("panel.title"), fontSize = 16, fontWeight = "bold" }),
       ui.row({ gap = 6, align = "center" }, {
-        ui.button({
-          glyph = s.paused and "player-play" or "player-pause",
-          glyphSize = 14,
-          variant = "ghost",
-          tooltip = s.paused and noctalia.tr("launcher.resume") or noctalia.tr("launcher.pause"),
-          onClick = function()
-            noctalia.state.set("wdid_command", { op = s.paused and "resume" or "pause" })
-          end,
-        }),
+        trackingControls(s),
         ui.button({
           glyph = "settings",
           glyphSize = 14,
@@ -122,27 +142,42 @@ local function headerRow()
   })
 end
 
+-- Builds a children array that silently drops nil entries: a nil inside a
+-- children array is a hole in the UI tree and the host logs "ui tree node is
+-- not a table" on every render (the per-second desktop widget turns that
+-- into thousands of warnings). select("#", ...) counts trailing nils
+-- correctly, unlike #t on a holey table.
+local function kidsList(...)
+  local n = select("#", ...)
+  local out = {}
+  for i = 1, n do
+    local v = select(i, ...)
+    if v ~= nil then
+      out[#out + 1] = v
+    end
+  end
+  return out
+end
+
 local function appRow(rank, app, totalForPeriod)
   local seconds = tonumber(app.seconds) or 0
   local appId = tostring(app.appId or app.appName or "?")
   local displayName = displayNames.resolve(app.appId, app.appName)
-  local iconPath = noctalia.appIconPath(appId, 32)
-  local leading
-  if iconPath then
-    leading = ui.image({ path = iconPath, width = 20, height = 20, radius = 5 })
-  else
-    leading = ui.glyph({ name = "app-window", size = 18, color = "on_surface/0.8" })
-  end
+  -- Icon lookup keys on the technical app_id; nil means "no icon" and the
+  -- row simply renders without one.
+  local iconPath = icons.resolve(appId, 24)
+  local leading = iconPath and ui.image({ path = iconPath, width = 20, height = 20, radius = 5 }) or nil
   local share = 0
   if totalForPeriod > 0 then
     share = math.min(1, seconds / totalForPeriod)
   end
-  -- The name button carries the tooltip (the id); the label stays human.
-  -- The name button carries the tooltip (the id); the label stays human.
-  -- controlSize = "sm" matters: at default size the button's vertical padding
-  -- makes each row ~40px+ tall and six rows alone ate most of the panel,
-  -- squeezing the session viewport to a single row.
-  return ui.row({ key = "app-" .. rank .. "-" .. appId, gap = 8, align = "center" }, {
+  -- Leading icon first (nil omits it — a row never breaks on a missing
+  -- icon). The name button carries the tooltip (the id); the label stays
+  -- human. controlSize = "sm" matters: at default size the button's vertical
+  -- padding makes each row ~40px+ tall and six rows alone ate most of the
+  -- panel, squeezing the session viewport to a single row.
+  return ui.row({ key = "app-" .. rank .. "-" .. appId, gap = 8, align = "center" }, kidsList(
+    leading,
     ui.button({
       key = "app-name-" .. rank .. "-" .. appId,
       text = displayName,
@@ -166,8 +201,8 @@ local function appRow(rank, app, totalForPeriod)
       text = formatting.fmtDuration(seconds),
       fontSize = 12,
       color = "on_surface/0.8",
-    }),
-  })
+    })
+  ))
 end
 
 local function sessionRow(session)
@@ -180,13 +215,24 @@ local function sessionRow(session)
     dur = formatting.fmtDuration(tonumber(session.durationSeconds) or 0)
   end
   local display = displayNames.resolve(session.appId, session.appName)
+  local sessId = tostring(session.appId or session.appName or "?")
   local title = display
   if session.title and session.title ~= "" then
     title = title .. " — " .. session.title
   end
-  return ui.row({ key = "sess-" .. session.id, gap = 8, align = "center" }, {
+  -- Smaller icon than the top-app rows; keyed on the same technical id the
+  -- tooltip shows. nil simply omits the node — scrolling layout is untouched.
+  local sessIcon
+  do
+    local iconPath = icons.resolve(sessId, 16)
+    if iconPath then
+      sessIcon = ui.image({ path = iconPath, width = 16, height = 16, radius = 4 })
+    end
+  end
+  return ui.row({ key = "sess-" .. session.id, gap = 8, align = "center" }, kidsList(
     ui.label({ text = when, fontSize = 11, color = "on_surface/0.5", width = 44 }),
     ui.glyph({ name = isCurrent and "point" or "circle", size = 8, color = isCurrent and "primary" or "on_surface/0.3" }),
+    sessIcon,
     ui.button({
       key = "sess-name-" .. session.id,
       text = title,
@@ -195,11 +241,11 @@ local function sessionRow(session)
       controlSize = "sm",
       contentAlign = "start",
       flexGrow = 1,
-      tooltip = noctalia.tr("panel.app_id_tip") .. " " .. tostring(session.appId or session.appName or "?"),
+      tooltip = noctalia.tr("panel.app_id_tip") .. " " .. sessId,
       onClick = function() end,
     }),
-    ui.label({ text = dur, fontSize = 11, color = "on_surface/0.7" }),
-  })
+    ui.label({ text = dur, fontSize = 11, color = "on_surface/0.7" })
+  ))
 end
 
 local function emptyView()
@@ -297,6 +343,19 @@ local function dayView(dateKey, pausedHintKey)
         ui.glyph({ name = "player-pause", size = 16, color = "primary" }),
         ui.label({ text = noctalia.tr(pausedHintKey or "panel.paused_day_hint"), fontSize = 12, color = "on_surface/0.8" }),
       }))
+    elseif serviceState().trackingAvailable == false and dateKey == todayKey() then
+      -- Unavailable NOW, not "no data": the banner says so explicitly while
+      -- the rest of the (possibly empty) view renders normally below.
+      table.insert(kids, ui.row({
+        fill = "on_surface/0.06",
+        radius = 8,
+        padding = 10,
+        gap = 8,
+        align = "center",
+      }, {
+        ui.glyph({ name = "plug-off", size = 16, color = "on_surface/0.6" }),
+        ui.label({ text = noctalia.tr("panel.unavailable_body"), fontSize = 12, color = "on_surface/0.8" }),
+      }))
     end
     table.insert(kids, emptyView())
     -- Views return a LIST of sibling nodes; render() splices them into the
@@ -329,6 +388,18 @@ local function dayView(dateKey, pausedHintKey)
     }, {
       ui.glyph({ name = "player-pause", size = 16, color = "primary" }),
       ui.label({ text = noctalia.tr(pausedHintKey or "panel.paused_day_hint"), fontSize = 12, color = "on_surface/0.8" }),
+    }))
+  elseif serviceState().trackingAvailable == false and dateKey == todayKey() then
+    -- Same banner as the empty-day path: unavailable NOW, with history below.
+    table.insert(kids, ui.row({
+      fill = "on_surface/0.06",
+      radius = 8,
+      padding = 10,
+      gap = 8,
+      align = "center",
+    }, {
+      ui.glyph({ name = "plug-off", size = 16, color = "on_surface/0.6" }),
+      ui.label({ text = noctalia.tr("panel.unavailable_body"), fontSize = 12, color = "on_surface/0.8" }),
     }))
   end
 
